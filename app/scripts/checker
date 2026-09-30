@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+# """
+# WASTE DATASET: EXTRACT + ANALYZE + MERGE (MULTI-ZIP VERSION)
+# ==============================================================
+
+# Supports ANY number of zip files. Add more paths anytime.
+
+# HOW TO RUN:
+# -----------
+# Method 1 - Auto-find all zips in Downloads folder:
+#     python extract_merge_multi.py
+
+# Method 2 - Pass zip files as arguments:
+#     python extract_merge_multi.py "C:\Users\You\Downloads\file1.zip" "C:\Users\You\Downloads\file2.zip"
+
+# Method 3 - Edit the ZIP_PATHS list inside this file:
+#     ZIP_PATHS = [
+#         r"C:\Users\You\Downloads\dataset-resized.zip",
+#         r"C:\Users\You\Downloads\realwaste.zip",
+#         r"C:\Users\You\Downloads\kaggle-waste.zip",
+#     ]
+#     Then run: python extract_merge_multi.py
+
+# OUTPUT:
+#     extracted/       - All zip contents extracted here
+#     merged_dataset/  - Clean merged folder with unified classes
+# """
+
+import os
+import sys
+import shutil
+import zipfile
+import hashlib
+import argparse
+from pathlib import Path
+from collections import defaultdict, Counter
+
+# ============================================================
+# CONFIG: Add your zip file paths here (Method 3)
+# ============================================================
+ZIP_PATHS = [
+    r"C:\Users\Dhurgannath\Downloads\dataset-resized.zip",
+    r"C:\Users\Dhurgannath\Downloads\realwaste.zip",
+    # Add more paths below, one per line:
+    # r"C:\Users\Dhurgannath\Downloads\kaggle-waste.zip",
+    # r"C:\Users\Dhurgannath\Downloads\garbage-classification.zip",
+]
+
+# Folders
+EXTRACT_FOLDER = "extracted"
+MERGED_FOLDER = "merged_dataset"
+
+# Image extensions
+IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff'}
+
+# Class name mapping: unify different naming across all datasets
+CLASS_MAP = {
+    # TrashNet classes
+    'cardboard': 'cardboard',
+    'glass': 'glass',
+    'metal': 'metal',
+    'paper': 'paper',
+    'plastic': 'plastic',
+    'trash': 'trash',
+
+    # Common variations
+    'cardboards': 'cardboard',
+    'glasses': 'glass',
+    'metals': 'metal',
+    'papers': 'paper',
+    'plastics': 'plastic',
+
+    # RealWaste classes
+    'food_organics': 'organic',
+    'food organics': 'organic',
+    'miscellaneous': 'trash',
+    'misc': 'trash',
+    'textiles': 'trash',
+    'vegetation': 'organic',
+    'vegetation_': 'organic',
+
+    # Kaggle / other common names
+    'organic': 'organic',
+    'biological': 'organic',
+    'recyclable': 'recyclable',
+    'non-recyclable': 'trash',
+    'non_recyclable': 'trash',
+    'clothes': 'trash',
+    'shoes': 'trash',
+    'battery': 'trash',
+    'shoe': 'trash',
+    'clothing': 'trash',
+}
+
+
+def print_box(title):
+    print("\n" + "=" * 65)
+    print("  " + title)
+    print("=" * 65)
+
+
+def find_zip_files(folder):
+    """Auto-find all zip files in a folder."""
+    if not os.path.exists(folder):
+        return []
+    return [os.path.join(folder, f) for f in os.listdir(folder) if f.lower().endswith('.zip')]
+
+
+def extract_zip(zip_path, extract_to):
+    """Extract a single zip file."""
+    if not os.path.exists(zip_path):
+        print("\n  [MISSING] " + zip_path)
+        return None
+
+    zip_name = Path(zip_path).stem
+    out_path = os.path.join(extract_to, zip_name)
+    os.makedirs(out_path, exist_ok=True)
+
+    size_mb = os.path.getsize(zip_path) / (1024 * 1024)
+    print("\n  Extracting: " + os.path.basename(zip_path))
+    print("     Size: " + str(round(size_mb, 1)) + " MB")
+
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(out_path)
+        print("     Done!")
+        return out_path
+    except zipfile.BadZipFile:
+        print("     Error: Not a valid zip file!")
+        return None
+    except Exception as e:
+        print("     Error: " + str(e))
+        return None
+
+
+def scan_images(folder_path, max_depth=4):
+    """Find all image folders recursively."""
+    results = []
+    total_images = 0
+
+    for root, dirs, files in os.walk(folder_path):
+        current_depth = root.replace(folder_path, "").count(os.sep)
+        if current_depth > max_depth:
+            del dirs[:]
+            continue
+
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+
+        images = [f for f in files if Path(f).suffix.lower() in IMAGE_EXTS]
+        if images:
+            results.append({
+                'path': root,
+                'name': os.path.basename(root),
+                'count': len(images),
+                'images': images[:3]
+            })
+            total_images += len(images)
+
+        # Stop if this is a leaf image folder
+        if images and current_depth >= 1:
+            has_image_subdirs = False
+            for d in dirs:
+                subdir = os.path.join(root, d)
+                if any(Path(f).suffix.lower() in IMAGE_EXTS for f in os.listdir(subdir) if os.path.isfile(os.path.join(subdir, f))):
+                    has_image_subdirs = True
+                    break
+            if not has_image_subdirs:
+                dirs[:] = []
+
+    return results, total_images
+
+
+def show_details(name, extract_path):
+    """Show detailed breakdown of one dataset."""
+    print_box("INSIDE: " + name)
+
+    folders, total = scan_images(extract_path)
+
+    if not folders:
+        print("\n  No image folders found!")
+        return []
+
+    print("\n  Folders: " + str(len(folders)) + " | Images: " + str(total) + "\n")
+
+    print("  " + "Folder Name".ljust(22) + "Images".rjust(8) + "   Sample Files")
+    print("  " + "-" * 60)
+    for f in folders:
+        samples = ", ".join(f["images"])
+        if f["count"] > 3:
+            samples += " ... (+" + str(f["count"]-3) + ")"
+        print("  " + f["name"].ljust(22) + str(f["count"]).rjust(8) + "   " + samples)
+
+    return folders
+
+
+def md5(filepath):
+    """Calculate MD5 hash."""
+    h = hashlib.md5()
+    with open(filepath, "rb") as f:
+        while chunk := f.read(8192):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def merge(extracted_paths):
+    """Merge all extracted datasets into unified folders."""
+    print_box("MERGING ALL DATASETS")
+
+    os.makedirs(MERGED_FOLDER, exist_ok=True)
+    seen_hashes = set()
+    dup_count = 0
+    stats = Counter()
+
+    # Collect all class folders from all sources
+    all_classes = defaultdict(list)
+
+    for src_path in extracted_paths:
+        folders, _ = scan_images(src_path)
+        for folder in folders:
+            raw_name = folder["name"].lower().strip().replace(" ", "_").replace("-", "_")
+            unified = CLASS_MAP.get(raw_name, raw_name)
+            all_classes[unified].append(folder["path"])
+
+    print("\n  Unified classes found: " + str(len(all_classes)))
+    for cls, sources in sorted(all_classes.items()):
+        img_count = sum(len([f for f in os.listdir(p) if Path(f).suffix.lower() in IMAGE_EXTS]) for p in sources)
+        print("     " + cls.ljust(15) + " <- " + str(len(sources)) + " source(s), ~" + str(img_count) + " images")
+
+    print("\n  Copying and deduplicating...")
+
+    for unified_class, source_folders in sorted(all_classes.items()):
+        target_dir = os.path.join(MERGED_FOLDER, unified_class)
+        os.makedirs(target_dir, exist_ok=True)
+
+        for src_dir in source_folders:
+            for filename in os.listdir(src_dir):
+                if Path(filename).suffix.lower() not in IMAGE_EXTS:
+                    continue
+
+                src_file = os.path.join(src_dir, filename)
+                if not os.path.isfile(src_file):
+                    continue
+
+                # Duplicate check
+                h = md5(src_file)
+                if h in seen_hashes:
+                    dup_count += 1
+                    continue
+                seen_hashes.add(h)
+
+                # Handle filename conflicts
+                dest_file = os.path.join(target_dir, filename)
+                counter = 1
+                name, ext = os.path.splitext(filename)
+                while os.path.exists(dest_file):
+                    dest_file = os.path.join(target_dir, name + "_" + str(counter).zfill(3) + ext)
+                    counter += 1
+
+                shutil.copy2(src_file, dest_file)
+                stats[unified_class] += 1
+
+    # Report
+    print_box("MERGE COMPLETE")
+    print("\n  Output: " + os.path.abspath(MERGED_FOLDER) + "\n")
+
+    print("  " + "Class".ljust(15) + "Images".rjust(8))
+    print("  " + "-" * 28)
+    for cls in sorted(stats.keys()):
+        print("  " + cls.ljust(15) + str(stats[cls]).rjust(8))
+    print("  " + "-" * 28)
+    print("  " + "TOTAL".ljust(15) + str(sum(stats.values())).rjust(8))
+    print("\n  Duplicates removed: " + str(dup_count))
+
+    return MERGED_FOLDER
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Extract and merge multiple waste datasets')
+    parser.add_argument('zipfiles', nargs='*', help='Zip file paths (optional)')
+    parser.add_argument('--downloads', action='store_true', help='Auto-find zips in Downloads folder')
+    args = parser.parse_args()
+
+    print_box("WASTE DATASET TOOL (MULTI-ZIP)")
+
+    # Determine which zip files to process
+    zip_files = []
+
+    if args.zipfiles:
+        # Method 2: Command line arguments
+        zip_files = args.zipfiles
+        print("\n  Using zip files from command line:")
+    elif ZIP_PATHS and ZIP_PATHS[0] and os.path.exists(ZIP_PATHS[0]):
+        # Method 3: Configured paths in this file
+        zip_files = [p for p in ZIP_PATHS if p and os.path.exists(p)]
+        print("\n  Using zip files from ZIP_PATHS config:")
+    else:
+        # Method 1: Auto-find in Downloads
+        downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+        zip_files = find_zip_files(downloads)
+        print("\n  Auto-finding zip files in Downloads folder:")
+
+    if not zip_files:
+        print("\n  No zip files found!")
+        print("  Please either:")
+        print("    1. Put zip files in your Downloads folder and run again")
+        print("    2. Pass paths as arguments: python extract_merge_multi.py file1.zip file2.zip")
+        print("    3. Edit ZIP_PATHS inside this script")
+        return
+
+    for zf in zip_files:
+        print("     - " + zf)
+
+    # Extract all
+    os.makedirs(EXTRACT_FOLDER, exist_ok=True)
+    extracted = []
+
+    print_box("EXTRACTION")
+    for zf in zip_files:
+        path = extract_zip(zf, EXTRACT_FOLDER)
+        if path:
+            extracted.append(path)
+
+    if not extracted:
+        print("\n  No files extracted. Stopping.")
+        return
+
+    # Show details for each
+    for path in extracted:
+        show_details(os.path.basename(path), path)
+
+    # Merge all
+    merged = merge(extracted)
+
+    # Next steps
+    print_box("NEXT STEPS")
+    print("\n  Your merged dataset is ready at:")
+    print("     " + os.path.abspath(merged))
+    print("\n  Run these next:")
+    print("     1. python filter_images.py")
+    print("     2. python split_data.py")
+    print("     3. python train_model.py")
+
+
+if __name__ == "__main__":
+    main()

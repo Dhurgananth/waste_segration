@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# VS Code
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment and secrets
+.env
+
+# Logs
+*.log
+
+# Large ML models
+*.keras
+*.h5
+*.pkl
+*.pt
+*.pth
+
+# Large datasets
+*.csv
+*.parquet
+*.zip
+*.tar
+*.gz
